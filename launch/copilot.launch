@@ -55,20 +55,20 @@
   </include>
 
   <!--Finally, launch the copilot-->
-<!--  <node-->
-<!--    name="copilot"-->
-<!--    pkg="interbotix_copilot"-->
-<!--    type="copilot"-->
-<!--    output="screen"-->
-<!--    ns="$(arg robot_name)">-->
-<!--    <param name="robot_model"                  value="$(arg robot_model)"/>-->
-<!--    <param name="robot_name"                   value="$(arg robot_name)"/>-->
-<!--    <param name="group_name"                   value="$(arg group_name)"/>-->
-<!--    <param name="collision_height"             value="$(arg collision_height)"/>-->
-<!--    <param name="base_length"                  value="$(arg base_length)"/>-->
-<!--    <param name="workspace_length"             value="$(arg workspace_length)"/>-->
-<!--    <param name="use_sim"                      value="$(arg use_sim)"/>-->
-<!--  </node>-->
+  <node
+    name="copilot"
+    pkg="interbotix_copilot"
+    type="copilot"
+    output="screen"
+    ns="$(arg robot_name)">
+    <param name="robot_model"                  value="$(arg robot_model)"/>
+    <param name="robot_name"                   value="$(arg robot_name)"/>
+    <param name="group_name"                   value="$(arg group_name)"/>
+    <param name="collision_height"             value="$(arg collision_height)"/>
+    <param name="base_length"                  value="$(arg base_length)"/>
+    <param name="workspace_length"             value="$(arg workspace_length)"/>
+    <param name="use_sim"                      value="$(arg use_sim)"/>
+  </node>
 
 <!--Only launch moveit if not in simulation (ie `$(find interbotix_sx_sdk)/sciripts/xs_sdk_sim` is not compatible with moveit.)-->
   <group unless="$(arg use_sim)">

@@ -12,11 +12,9 @@ def main():
         robot_type = rosparam.get_param("copilot/robot_model")
         name = rosparam.get_param("copilot/robot_name")
         group_name = rosparam.get_param("copilot/group_name")
-    except MasterError:
-        # todo: TEMPORARY
-        robot_type = "px150"
-        name = "px150"
-        group_name = "arm"
+    except MasterError as e:
+        print(f"The parameters `robot_model`, `robot_name` and `group` name should be set on the parameter server: {e}")
+        raise e
     copilot = Copilot(robot_type=robot_type, name=name, group_name=group_name)
     copilot.gui()
     rospy.on_shutdown(copilot.shutdown)
