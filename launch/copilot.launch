@@ -1,0 +1,118 @@
+<launch>
+
+<!--Args, inspired by "$(find interbotix_xsarm_control)/launch/xsarm_control.launch"-->
+  <arg name="robot_model"                       default=""/>
+  <arg name="robot_name"                        default="$(arg robot_model)"/>
+  <arg name="base_link_frame"                   default="base_link"/>
+  <arg name="show_ar_tag"                       default="false"/>
+  <arg name="show_gripper_bar"                  default="true"/>
+  <arg name="show_gripper_fingers"              default="true"/>
+  <arg name="use_world_frame"                   default="true"/>
+  <arg name="external_urdf_loc"                 default=""/>
+  <arg name="use_rviz"                          default="true"/>
+  <arg name="motor_configs"                     default="$(find interbotix_xsarm_control)/config/$(arg robot_model).yaml"/>
+  <arg name="mode_configs"                      default="$(find interbotix_xsarm_control)/config/modes.yaml"/>
+  <arg name="load_configs"                      default="true"/>
+  <arg name="use_sim"                           default="false"/>
+  <arg name="group_name"                        default="arm"/>
+  <arg name="xs_sdk_type" value="xs_sdk" unless="$(arg use_sim)"/>
+  <arg name="xs_sdk_type" value="xs_sdk_sim" if="$(arg use_sim)"/>
+<!--Args & params inspired by "$(find interbotix_xsarm_ros_control)/launch/xsarm_ros_control.launch"-->
+  <arg name="dof"                               default="5"/>  <!--todo: get dof from mode config-->
+  <rosparam file="$(find interbotix_xsarm_ros_control)/config/$(arg dof)dof_controllers.yaml" command="load" ns="$(arg robot_name)"/>
+  <rosparam file="$(find interbotix_xsarm_ros_control)/config/hardware.yaml" command="load" ns="$(arg robot_name)"/>
+<!--Args & params inspired by "$(find interbotix_xsarm_moveit)/launch/move_group.launch"-->
+  <arg name="debug" default="false" doc="GDB Debug Option"/>
+  <arg name="allow_trajectory_execution" default="true" doc="move_group settings"/>
+  <arg name="fake_execution" default="false" doc="move_group settings"/>
+  <arg name="max_safe_path_cost" default="1" doc="move_group settings"/>
+  <arg name="jiggle_fraction" default="0.05" doc="move_group settings"/>
+  <arg name="publish_monitored_planning_scene" default="true" doc="move_group settings"/>
+  <arg name="capabilities" default=""/>
+  <arg name="disable_capabilities" default=""/>
+  <arg name="external_srdf_loc" default=""/>  <!--todo: Should actually be a parameter in robot_description.launch...-->
+<!--Args & params inspired by "$(find interbotix_calibration)/launch/interbotix_calibration.launch" (github J.Luijkx)-->
+  <arg name="rviz_frame"                        default="world"/>
+  <arg name="collision_height"                  default="0.02" doc="Specifies the height with respect to the base where the robot is assumed to be in collision."/>
+  <arg name="base_length"                       default="0.4" doc="Specifies the length around the base that is not considered as collision object. "/>
+  <arg name="workspace_length"                  default="2.4" doc="Specifies the size of the collision object."/>
+
+<!--Inspired by "$(find interbotix_xsarm_ros_control)/launch/xsarm_ros_control.launch"-->
+  <include file="$(find interbotix_xsarm_control)/launch/xsarm_control.launch">
+    <arg name="robot_model"                       value="$(arg robot_model)"/>
+    <arg name="robot_name"                        value="$(arg robot_name)"/>
+    <arg name="base_link_frame"                   value="$(arg base_link_frame)"/>
+    <arg name="show_ar_tag"                       value="$(arg show_ar_tag)"/>
+    <arg name="show_gripper_bar"                  value="$(arg show_gripper_bar)"/>
+    <arg name="show_gripper_fingers"              value="$(arg show_gripper_fingers)"/>
+    <arg name="use_world_frame"                   value="$(arg use_world_frame)"/>
+    <arg name="external_urdf_loc"                 value="$(arg external_urdf_loc)"/>
+    <arg name="use_rviz"                          value="$(arg use_rviz)"/> <!-- #todo: Or do we launch moveit_rviz.launch?-->
+    <arg name="motor_configs"                     value="$(arg motor_configs)"/>
+    <arg name="mode_configs"                      value="$(arg mode_configs)"/>
+    <arg name="load_configs"                      value="$(arg load_configs)"/>
+    <arg name="use_sim"                           value="$(arg use_sim)"/>
+  </include>
+
+  <!--Finally, launch the copilot-->
+<!--  <node-->
+<!--    name="copilot"-->
+<!--    pkg="interbotix_copilot"-->
+<!--    type="copilot"-->
+<!--    output="screen"-->
+<!--    ns="$(arg robot_name)">-->
+<!--    <param name="robot_model"                  value="$(arg robot_model)"/>-->
+<!--    <param name="robot_name"                   value="$(arg robot_name)"/>-->
+<!--    <param name="group_name"                   value="$(arg group_name)"/>-->
+<!--    <param name="collision_height"             value="$(arg collision_height)"/>-->
+<!--    <param name="base_length"                  value="$(arg base_length)"/>-->
+<!--    <param name="workspace_length"             value="$(arg workspace_length)"/>-->
+<!--    <param name="use_sim"                      value="$(arg use_sim)"/>-->
+<!--  </node>-->
+
+<!--Only launch moveit if not in simulation (ie `$(find interbotix_sx_sdk)/sciripts/xs_sdk_sim` is not compatible with moveit.)-->
+  <group unless="$(arg use_sim)">
+    <node
+      name="controller_spawner"
+      pkg="controller_manager"
+      type="controller_manager"
+      respawn="false"
+      output="screen"
+      ns="$(arg robot_name)"
+      args="spawn arm_controller gripper_controller">
+    </node>
+
+    <node
+      name="xs_hardware_interface"
+      pkg="interbotix_xs_ros_control"
+      type="xs_hardware_interface"
+      output="screen"
+      ns="$(arg robot_name)">
+    </node>
+
+  <!--Inspired by "$(find interbotix_xsarm_moveit)/launch/move_group.launch"-->
+    <include file="$(find interbotix_xsarm_moveit)/launch/move_group.launch" ns="$(arg robot_name)">
+      <arg name="debug"                             value="$(arg debug)"/>
+      <arg name="allow_trajectory_execution"        value="$(arg allow_trajectory_execution)"/>
+      <arg name="fake_execution"                    value="$(arg fake_execution)"/>
+      <arg name="max_safe_path_cost"                value="$(arg max_safe_path_cost)"/>
+      <arg name="jiggle_fraction"                   value="$(arg jiggle_fraction)"/>
+      <arg name="publish_monitored_planning_scene"  value="$(arg publish_monitored_planning_scene)"/>
+      <arg name="capabilities"                      value="$(arg capabilities)"/>
+      <arg name="disable_capabilities"              value="$(arg disable_capabilities)"/>
+      <arg name="robot_model"                       value="$(arg robot_model)"/>
+      <arg name="robot_name"                        value="$(arg robot_name)"/>
+      <arg name="base_link_frame"                   value="$(arg base_link_frame)"/>
+      <arg name="show_ar_tag"                       value="$(arg show_ar_tag)"/>
+      <arg name="external_srdf_loc"                 value="$(arg external_srdf_loc)"/>
+      <arg name="dof"                               value="$(arg dof)"/>
+    </include>
+  <!--Inspired by "$(find interbotix_calibration)/launch/interbotix_calibration.launch" (github J.Luijkx)-->
+    <!--  <include if="$(arg use_rviz)" file="$(find interbotix_xsarm_moveit)/launch/moveit_rviz.launch" ns="$(arg robot_name)">-->
+    <!--    <arg name="rviz_frame"                        value="$(arg rviz_frame)"/>-->
+    <!--    <arg name="config"                            value="true"/>-->
+    <!--  </include>-->
+  </group>
+
+</launch>
+

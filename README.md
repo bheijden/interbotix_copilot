@@ -8,7 +8,7 @@ This repository contains a client/copilot package for Interbotix X-series manipu
 [Interbotix ROS Drivers](https://www.trossenrobotics.com/docs/interbotix_xsarms/ros_interface/index.html)  
 
 **Python dependencies**  
-pyqt5-qt5
+PyQt5
 
 1. Go to the src folder of your catkin workspace ([or create a new one if needed](http://wiki.ros.org/catkin/Tutorials/create_a_workspace)).
 2. Next, clone this repo:

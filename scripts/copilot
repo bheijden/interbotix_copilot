@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+
+import rospy
+import rosparam
+from rosgraph.masterapi import MasterError
+from interbotix_copilot.copilot import Copilot
+
+
+def main():
+    rospy.init_node('copilot')
+    try:
+        robot_type = rosparam.get_param("copilot/robot_model")
+        name = rosparam.get_param("copilot/robot_name")
+        group_name = rosparam.get_param("copilot/group_name")
+    except MasterError:
+        # todo: TEMPORARY
+        robot_type = "px150"
+        name = "px150"
+        group_name = "arm"
+    copilot = Copilot(robot_type=robot_type, name=name, group_name=group_name)
+    copilot.gui()
+    rospy.on_shutdown(copilot.shutdown)
+    while not rospy.is_shutdown():
+        copilot.window.show()
+        copilot.app.exec()
+
+
+if __name__ == '__main__':
+    main()
