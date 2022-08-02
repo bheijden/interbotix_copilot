@@ -6,6 +6,8 @@ It allows clients to run experimental code that is potentially unsafe with overs
 At any moment, the copilot GUI allows users to perform an emergency stop that stops the execution of client commands, 
 and brings the robot to a halt.
 
+**As of now, safely commanding positions using moveit is not yet supported.** 
+
 ## Installation instructions
 
 **Requirements**  
