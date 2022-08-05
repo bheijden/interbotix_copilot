@@ -3,7 +3,7 @@ from concurrent.futures import Future
 from threading import Event
 import time
 
-from interbotix_copilot.base_api import InterbotixArm, MODES, POSITION, VELOCITY, INTERBOTIX_MODES
+from interbotix_copilot.base_api import InterbotixArm, POSITION, VELOCITY, INTERBOTIX_MODES
 from interbotix_copilot.base_api import STOPPED, CANCELLED, EXECUTED, DISCARDED
 from interbotix_copilot.srv import Command, CommandResponse, CommandRequest
 
@@ -88,90 +88,82 @@ class Copilot(InterbotixArm):
     def shutdown(self):
         if self.app:
             print("Shutdown app.")
+            self.app.quit()
             self.window.close()
             self.window.shutdown()
-            self.app.quit()
 
-    # todo: initialize moveit.
     def _init_moveit(self):
         import moveit_commander
+        from moveit_msgs.msg import MoveGroupActionFeedback
         from geometry_msgs.msg import PoseStamped
-        import yaml
 
         # MoveIt parameters
-        self.current_position = None
-        self.base_frame = rospy.get_param("~robot_base_frame")
-        self.robot_effector_frame = rospy.get_param("~robot_effector_frame")
-        self.joint_names = yaml.safe_load(rospy.get_param("~joint_names"))
-        self.manipulator_group_name = rospy.get_param("~manipulator_group_name", "interbotix_arm")
-        self.end_effector_group_name = rospy.get_param("~end_effector_group_name", "interbotix_gripper")
-
-        self.ee_step = rospy.get_param("~ee_step", 0.01)
-        self.jump_threshold = rospy.get_param("~jump_threshold", 0.0)
-        self.collision_height = rospy.get_param("~collision_height", 0.1)
-        self.base_length = rospy.get_param("~base_length", 0.4)
-        self.workspace_length = rospy.get_param("~workspace_length", 2.4)
-        self.velocity_scaling_factor = rospy.get_param("~velocity_scaling_factor", 0.3)
-        self.acceleration_scaling_factor = rospy.get_param("~acceleration_scaling_factor", 0.3)
+        base_frame = rospy.get_param(f"/{self.NAME}/copilot/robot_base_frame")
+        self.moveit_group_name = rospy.get_param(f"/{self.NAME}/copilot/manipulator_group_name", "interbotix_arm")
+        collision_height = rospy.get_param(f"/{self.NAME}/copilot/collision_height", 0.1)
+        base_length = rospy.get_param(f"/{self.NAME}/copilot/base_length", 0.4)
+        workspace_length = rospy.get_param(f"/{self.NAME}/copilot/workspace_length", 2.4)
+        velocity_scaling_factor = rospy.get_param(f"/{self.NAME}/copilot/velocity_scaling_factor", 0.3)
+        acceleration_scaling_factor = rospy.get_param(f"/{self.NAME}/copilot/acceleration_scaling_factor", 0.3)
 
         # Initialize Moveit Commander and Scene
         moveit_commander.roscpp_initialize(sys.argv)
-        scene = moveit_commander.PlanningSceneInterface(synchronous=True)
+        scene = moveit_commander.PlanningSceneInterface(ns=f"/{self.NAME}", synchronous=True)
+        self.moveit_group = moveit_commander.MoveGroupCommander(self.moveit_group_name, f"/{self.NAME}/robot_description", ns=f"/{self.NAME}")
+        self.moveit_group.set_max_velocity_scaling_factor(velocity_scaling_factor)
+        self.moveit_group.set_max_acceleration_scaling_factor(acceleration_scaling_factor)
 
-        self.manipulator_group = moveit_commander.MoveGroupCommander(self.manipulator_group_name)
-        self.end_effector_group = moveit_commander.MoveGroupCommander(self.end_effector_group_name)
-        self.manipulator_group.set_max_velocity_scaling_factor(self.velocity_scaling_factor)
-        self.manipulator_group.set_max_acceleration_scaling_factor(self.acceleration_scaling_factor)
+        # Prepare feedback status updates
+        _last_status = [None]
+        _last_seq = [None]
+        self._last_status = _last_status
+        self._last_seq = _last_status
+
+        def _update_moveit_goal_status(msg):
+            _last_seq[0] = msg.header.seq
+            _last_status[0] = msg.status.status
+            # rospy.logwarn(f"last_seq={_last_seq[0]} | last_status={_last_status[0]} | {msg.status.text}")
+        self.moveit_fb_sub = rospy.Subscriber(f"/{self.NAME}/move_group/feedback", MoveGroupActionFeedback, _update_moveit_goal_status)
 
         # Add a collision object to the scenes
-        object_length = (self.workspace_length - self.base_length) / 2.0
+        object_length = (workspace_length - base_length) / 2.0
         p0 = PoseStamped()
-        p0.header.frame_id = self.base_frame
+        p0.header.frame_id = base_frame
         p0.pose.position.z = -0.051
         p0.pose.orientation.w = 1
 
         # Add a collision object to the scenes
         p1 = PoseStamped()
-        p1.header.frame_id = self.base_frame
-        p1.pose.position.x = (object_length + self.base_length) / 2.0
-        p1.pose.position.z = self.collision_height / 2.0
+        p1.header.frame_id = base_frame
+        p1.pose.position.x = (object_length + base_length) / 2.0
+        p1.pose.position.z = collision_height / 2.0
         p1.pose.orientation.w = 1
 
         # Add a collision object to the scenes
         p2 = PoseStamped()
-        p2.header.frame_id = self.base_frame
-        p2.pose.position.x = -(object_length + self.base_length) / 2.0
-        p2.pose.position.z = self.collision_height / 2.0
+        p2.header.frame_id = base_frame
+        p2.pose.position.x = -(object_length + base_length) / 2.0
+        p2.pose.position.z = collision_height / 2.0
         p2.pose.orientation.w = 1
 
         # Add a collision object to the scenes
         p3 = PoseStamped()
-        p3.header.frame_id = self.base_frame
-        p3.pose.position.y = (object_length + self.base_length) / 2.0
-        p3.pose.position.z = self.collision_height / 2.0
+        p3.header.frame_id = base_frame
+        p3.pose.position.y = (object_length + base_length) / 2.0
+        p3.pose.position.z = collision_height / 2.0
         p3.pose.orientation.w = 1
 
         # Add a collision object to the scenes
         p4 = PoseStamped()
-        p4.header.frame_id = self.base_frame
-        p4.pose.position.y = -(object_length + self.base_length) / 2.0
-        p4.pose.position.z = self.collision_height / 2.0
+        p4.header.frame_id = base_frame
+        p4.pose.position.y = -(object_length + base_length) / 2.0
+        p4.pose.position.z = collision_height / 2.0
         p4.pose.orientation.w = 1
 
-        scene.add_box("base0", p0, size=(self.workspace_length, self.workspace_length, 0.1))
-        scene.add_box("base1", p1, size=(object_length, self.base_length, self.collision_height))
-        scene.add_box("base2", p2, size=(object_length, self.base_length, self.collision_height))
-        scene.add_box("base3", p3, size=(self.workspace_length, object_length, self.collision_height))
-
-        # todo: initialize moveit commander
-        # todo: Files to launch:
-        #  $(find interbotix_xsarm_ros_control)/launch/xsarm_ros_control.launch
-        #  $(find interbotix_xsarm_moveit)/launch/move_group.launch
-        #  $(findinterbotix_xsarm_control)/launch/xsarm_control.launch
-        #  $(find interbotix_copilot)/launch/copilot.launch
-        # https://github.com/jelledouwe/interbotix_calibration/blob/main/interbotix_calibration/launch/interbotix_calibration.launch
-        # https://github.com/jelledouwe/interbotix_calibration/blob/main/interbotix_calibration/src/interbotix_calibration/interbotix_calibration_node.py#L144
-        pass
+        scene.add_box("base0", p0, size=(workspace_length, workspace_length, 0.1))
+        scene.add_box("base1", p1, size=(object_length, base_length, collision_height))
+        scene.add_box("base2", p2, size=(object_length, base_length, collision_height))
+        scene.add_box("base3", p3, size=(workspace_length, object_length, collision_height))
 
     def enable_feedthrough(self):
         # Wait for last task to be executed
@@ -282,36 +274,78 @@ class Copilot(InterbotixArm):
         f = self._submit_task(is_feedthrough, f"pause | duration={duration}", _task_pause, self, duration)
         return f
 
-    # todo: make option to use MoveIt for this.
     def go_to_home(self, is_feedthrough: bool = False) -> Future:
         """Go to home position.
 
         :param is_feedthrough: True if task is requested by a client.
         :return: Future of the task. Allows for blocking behavior by calling future.result(timeout [s]).
         """
-        # Switch to position operating mode (but remember operating mode before switch)
-        mode = (POSITION, "time", 300, 2000)
-        # Define how we go to the home position
-        with self.task_cond:
-            _f_cmd = self.write_commands(self.INFO.num_joints * [0], remap=False, operating_mode=mode, is_feedthrough=is_feedthrough)
-            f_pause = self.pause(duration=5.0, is_feedthrough=is_feedthrough)
-        return f_pause
+        cmd = self.INFO.num_joints * [0]
+        f = self.moveit_to(cmd, max_duration=5.0, remap=False, is_feedthrough=is_feedthrough)
+        return f
 
-    # todo: make option to use MoveIt for this.
     def go_to_sleep(self, is_feedthrough: bool = False) -> Future:
         """Go to sleep position.
 
         :param is_feedthrough: True if task is requested by a client.
         :return: Future of the task. Allows for blocking behavior by calling future.result(timeout [s]).
         """
-        # Switch to position operating mode (but remember operating mode before switch)
-        mode = (POSITION, "time", 300, 2000)
+        cmd = self.INFO.joint_sleep_positions
+        f = self.moveit_to(cmd, max_duration=5.0, remap=False, is_feedthrough=is_feedthrough)
+        return f
 
-        # Define how we go to the sleep position
+    def moveit_to(self, commands: t.List[float], max_duration: float, remap: bool = True, is_feedthrough: bool = False) -> Future:
+        """Go to designated position.
+
+        :param commands: Desired list of commands. {velocity: [rad/s], position: [rad]}
+        :param max_duration: Maximum duration in seconds.
+        :param remap: True will remap the order according to the copilot's set_joint_remapping().
+        :param is_feedthrough: True if task is requested by a client.
+        :return: Future of the task. Allows for blocking behavior by calling future.result(timeout [s]).
+        """
+        # Remap command to joint order (should only apply for commands, directly commanded by copilot).
+        if remap and self._to is not None:
+            indices = self._to
+        else:
+            indices = self.INFO.joint_state_indices
+        cmd = [commands[i] for i in indices]
+
+        # Define command task
+        def _task_moveit(arm: Copilot, move_group, cmd: t.List[float], max_d: float):
+            if is_feedthrough and not arm._feedthrough:
+                return DISCARDED
+            if arm.task_event.is_set():
+                return CANCELLED
+            # Overwrite last received status to 0: "PENDING".
+            arm._last_status[0] = 0
+            move_group.go(cmd, wait=False)
+            rate = rospy.Rate(20)
+            start = time.time()
+            while time.time() - start < max_d:
+                # Exit if status is not "PENDING" or "ACTIVE".
+                if arm._last_status[0] not in [0, 1]:
+                    move_group.stop()  # Calling `stop()` ensures that there is no residual movement
+                    return EXECUTED
+                # Check if we should cancel the task due to emergency stop
+                if arm.task_event.is_set():
+                    move_group.stop()  # Calling `stop()` ensures that there is no residual movement
+                    return STOPPED
+                rate.sleep()
+            move_group.stop()  # Calling `stop()` ensures that there is no residual movement
+            return EXECUTED
+
         with self.task_cond:
-            _f_cmd = self.write_commands(self.INFO.joint_sleep_positions, remap=False, operating_mode=mode, is_feedthrough=is_feedthrough)
-            f_pause = self.pause(duration=5.0, is_feedthrough=is_feedthrough)
-        return f_pause
+            if self.use_sim:
+                # Write command (unsafe)
+                _f_cmd = self.write_commands(cmd, remap=False, operating_mode=(POSITION, "time", 300, 2000), is_feedthrough=is_feedthrough)
+                # Pause to wait for execution
+                f = self.pause(duration=5.0, is_feedthrough=is_feedthrough)
+            else:
+                # Switch to position operating mode
+                _f_op = self.set_operating_mode(*(POSITION, "velocity", 13, 131), is_feedthrough=is_feedthrough)
+                # Submit moveit task
+                f = self._submit_task(is_feedthrough, f"moveit_to | cmd={cmd}", _task_moveit, self, self.moveit_group, cmd, max_duration)
+        return f
 
     def proceed(self) -> None:
         """
@@ -323,7 +357,6 @@ class Copilot(InterbotixArm):
         """
         self._stopping_event.set()
 
-    # todo: remove timeout
     def stop(self, is_feedthrough: bool = False):
         """Stop the robot in its current position. Cancels all scheduled tasks.
 
@@ -514,8 +547,6 @@ class Copilot(InterbotixArm):
         _success = True if f.result() in [EXECUTED] else False
         return SetBoolResponse(success=_success)
 
-    # todo: how to schedule moveit task?
-    # todo: use duration & multiple points
     def _handler_go_to(self, task: FollowJointTrajectoryGoal):
         if self.task_event.is_set():
             status = CANCELLED
@@ -523,19 +554,10 @@ class Copilot(InterbotixArm):
             status = EXECUTED
             for jtp in task.trajectory.points:
                 pos = jtp.positions
-                # todo: use duration
                 secs, nsecs = jtp.time_from_start.secs, jtp.time_from_start.nsecs
-                if pos == self.INFO.joint_sleep_positions:
-                    f = self.go_to_sleep(is_feedthrough=True)
-                    # Wait until we've reached the goal
-                    status = f.result()
-                elif list(pos) == self.INFO.num_joints * [0]:
-                    f = self.go_to_home(is_feedthrough=True)
-                    # Wait until we've reached the goal
-                    status = f.result()
-                else:
-                    # todo: use moveit to go to arbitrary positions
-                    pass
+                max_duration = secs + nsecs / 1e9
+                f = self.moveit_to(pos, max_duration=max_duration, is_feedthrough=True)
+                f.result()
         self.task_server.set_succeeded()
 
 

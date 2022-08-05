@@ -197,7 +197,7 @@ class Client(InterbotixArm):
         :return: Future of the task. Allows for blocking behavior by calling future.result(timeout [s]).
         """
         # Schedule a task to go to the home position in 4 seconds
-        f = self.go_to(points=[self.INFO.num_joints * [0]], timestamps=[4.0], remap=False)
+        f = self.go_to(points=[self.INFO.num_joints * [0]], timestamps=[5.0], remap=False)
         return f
 
     def go_to_sleep(self) -> Future:
@@ -206,7 +206,7 @@ class Client(InterbotixArm):
         :return: Future of the task. Allows for blocking behavior by calling future.result(timeout [s]).
         """
         # Schedule a task to go to the sleep position in 4 seconds
-        f = self.go_to(points=[list(self.INFO.joint_sleep_positions)], timestamps=[4.0], remap=False)
+        f = self.go_to(points=[list(self.INFO.joint_sleep_positions)], timestamps=[5.0], remap=False)
         return f
 
     def stop(self):

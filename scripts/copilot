@@ -4,6 +4,7 @@ import rospy
 import rosparam
 from rosgraph.masterapi import MasterError
 from interbotix_copilot.copilot import Copilot
+import signal
 
 
 def main():
@@ -16,8 +17,11 @@ def main():
         print(f"The parameters `robot_model`, `robot_name` and `group` name should be set on the parameter server: {e}")
         raise e
     copilot = Copilot(robot_type=robot_type, name=name, group_name=group_name)
-    copilot.gui()
+    # copilot.set_logger_level(level="DEBUG")
     rospy.on_shutdown(copilot.shutdown)
+    # Ensures that the gui is closed with ctrl + C.
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    copilot.gui()
     while not rospy.is_shutdown():
         copilot.window.show()
         copilot.app.exec()

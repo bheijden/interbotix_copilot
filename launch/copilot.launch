@@ -47,7 +47,7 @@
     <arg name="show_gripper_fingers"              value="$(arg show_gripper_fingers)"/>
     <arg name="use_world_frame"                   value="$(arg use_world_frame)"/>
     <arg name="external_urdf_loc"                 value="$(arg external_urdf_loc)"/>
-    <arg name="use_rviz"                          value="$(arg use_rviz)"/> <!-- #todo: Or do we launch moveit_rviz.launch?-->
+    <arg name="use_rviz"                          value="$(eval arg('use_rviz') and arg('use_sim'))"/>
     <arg name="motor_configs"                     value="$(arg motor_configs)"/>
     <arg name="mode_configs"                      value="$(arg mode_configs)"/>
     <arg name="load_configs"                      value="$(arg load_configs)"/>
@@ -68,6 +68,8 @@
     <param name="base_length"                  value="$(arg base_length)"/>
     <param name="workspace_length"             value="$(arg workspace_length)"/>
     <param name="use_sim"                      value="$(arg use_sim)"/>
+    <param name="robot_base_frame"             value="$(arg robot_name)/$(arg base_link_frame)"/>
+    <param name="manipulator_group_name"       value="interbotix_arm"/>
   </node>
 
 <!--Only launch moveit if not in simulation (ie `$(find interbotix_sx_sdk)/sciripts/xs_sdk_sim` is not compatible with moveit.)-->
@@ -108,10 +110,10 @@
       <arg name="dof"                               value="$(arg dof)"/>
     </include>
   <!--Inspired by "$(find interbotix_calibration)/launch/interbotix_calibration.launch" (github J.Luijkx)-->
-    <!--  <include if="$(arg use_rviz)" file="$(find interbotix_xsarm_moveit)/launch/moveit_rviz.launch" ns="$(arg robot_name)">-->
-    <!--    <arg name="rviz_frame"                        value="$(arg rviz_frame)"/>-->
-    <!--    <arg name="config"                            value="true"/>-->
-    <!--  </include>-->
+      <include if="$(arg use_rviz)" file="$(find interbotix_xsarm_moveit)/launch/moveit_rviz.launch" ns="$(arg robot_name)">
+        <arg name="rviz_frame"                        value="$(arg rviz_frame)"/>
+        <arg name="config"                            value="true"/>
+      </include>
   </group>
 
 </launch>
