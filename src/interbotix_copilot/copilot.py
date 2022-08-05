@@ -3,13 +3,14 @@ from concurrent.futures import Future
 from threading import Event
 import time
 
+from interbotix_copilot.base_api import InterbotixArm, MODES, POSITION, VELOCITY, INTERBOTIX_MODES
+from interbotix_copilot.base_api import STOPPED, CANCELLED, EXECUTED, DISCARDED
+from interbotix_copilot.srv import Command, CommandResponse, CommandRequest
+
 try:
     import rospy
     import rosparam
     from std_msgs.msg import Bool
-    from interbotix_copilot.base_api import InterbotixArm, MODES, POSITION, VELOCITY, INTERBOTIX_MODES
-    from interbotix_copilot.base_api import STOPPED, CANCELLED, EXECUTED, DISCARDED
-    from interbotix_copilot.srv import Command, CommandResponse, CommandRequest
     from interbotix_xs_msgs.srv import *
     from std_srvs.srv import SetBool, SetBoolRequest, SetBoolResponse
     # Task server

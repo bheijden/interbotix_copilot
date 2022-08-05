@@ -2,12 +2,14 @@ import typing as t
 from concurrent.futures import Future
 from threading import Event
 import time
+
+from interbotix_copilot.base_api import InterbotixArm, MODES, POSITION, VELOCITY
+from interbotix_copilot.base_api import STOPPED, CANCELLED, EXECUTED
+from interbotix_copilot.srv import Command, CommandResponse, CommandRequest
+
 try:
     import rospy
     from std_msgs.msg import Bool
-    from interbotix_copilot.base_api import InterbotixArm, MODES, POSITION, VELOCITY
-    from interbotix_copilot.base_api import STOPPED, CANCELLED, EXECUTED
-    from interbotix_copilot.srv import Command, CommandResponse, CommandRequest
     from interbotix_xs_msgs.srv import *
     from std_srvs.srv import SetBool, SetBoolRequest
     # Task Action
@@ -34,7 +36,7 @@ class Client(InterbotixArm):
         :param group_name: Name of the group of joint motors.
         """
         try:
-            rospy.init_node(f"{name}_client")
+            rospy.init_node(f"{name}_client", disable_signals=True)
         except rospy.exceptions.ROSException:
             pass
 

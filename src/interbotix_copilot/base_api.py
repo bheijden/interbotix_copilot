@@ -1,11 +1,17 @@
 import abc
 import time
 import typing as t
+import numpy as np
 from threading import Event, Condition
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Tuple, Union, List
 import logging
 
+try:
+    import modern_robotics as mr
+except ImportError as e:
+    print(f"Hint: the modern robotics python package must be installed: {e}")
+    raise e
 
 try:
     import rospy
@@ -14,10 +20,11 @@ try:
     from sensor_msgs.msg import JointState
     from roscpp.srv import SetLoggerLevel
     from interbotix_xs_modules import core
+    import interbotix_xs_modules.mr_descriptions as mrd
     from interbotix_copilot.logging_utils import add_logging_level
     from std_msgs.msg import Bool
 except ImportError as e:
-    print(f"ROS (incl. interbotix driver, interbotix_copilot) must be installed & sourced: {e}")
+    print(f"Hint: ROS (incl. interbotix driver, interbotix_copilot) must be installed & sourced: {e}")
     raise e
 
 # Operating modes:
@@ -95,6 +102,7 @@ class InterbotixArm:
         self.INFO = self.get_info()
         self.task_loggers = self.create_task_loggers()
         self._feedthrough = None
+        self.robot_des = getattr(mrd, robot_type)
 
         # Initialize log level services
         self.srv_set_logger_level = rospy.ServiceProxy(f"/{name}/xs_sdk/set_logger_level", SetLoggerLevel)
@@ -146,26 +154,7 @@ class InterbotixArm:
         return loggers
 
     def set_logger_level(self, level: str = "DEBUG"):
-        # _LOG_LEVELS = {
-        #     "SILENT": rospy.DEBUG,
-        #     "DEBUG": rospy.DEBUG,
-        #     "INFO": rospy.INFO,
-        #     "WARN": rospy.WARN,
-        #     "ERROR": rospy.ERROR,
-        #     "FATAL": rospy.FATAL,
-        # }
-        # _LOG_LEVELS = {
-        #     "SILENT": 0,
-        #     "DEBUG": 10,
-        #     "INFO": 20,
-        #     "WARN": 30,
-        #     "ERROR": 40,
-        #     "FATAL": 50,
-        # }
         self.srv_set_logger_level(logger="ros.interbotix_xs_sdk", level=level)
-        # logger = logging.getLogger("eagerx")
-        # logger.setLevel(_LOG_LEVELS[level])
-        # self.srv_set_logger_level(logger="ros.interbotix_xs_sdk", level=level)
 
     def set_joint_remapping(self, joint_names: t.List[str]):
         """Remap joint measurement/commands based on this index mapping
@@ -251,6 +240,17 @@ class InterbotixArm:
         profile_velocity = profile_velocity[0]
 
         return mode, profile_type, profile_acceleration, profile_velocity
+
+    def get_ee_pose(self) -> t.Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Get the actual end-effector pose w.r.t the base frame.
+
+        :returns: <3x3> Rotation matrix, position vector w.r.t base, <4x4> homogeneous transformation matrix.
+        """
+        joint_states = [self.dxl.joint_states.position[self.dxl.js_index_map[name]] for name in
+                        self.INFO.joint_names]
+        T_sb = mr.FKinSpace(self.robot_des.M, self.robot_des.Slist, joint_states)
+        rot_mat, position = mr.TransToRp(T_sb)
+        return rot_mat.astype("float32"), position.astype("float32"), T_sb.astype("float32")
 
     @abc.abstractmethod
     def _set_operating_mode(self, mode, profile_type, profile_velocity, profile_acceleration):
@@ -529,11 +529,14 @@ class InterbotixArm:
         else:
             indices = self.INFO.joint_state_indices
         s = self.dxl.robot_get_joint_states()
+        if self.use_sim:  # velocities & efforts are not simulated
+            s.velocity = [0.0] * len(s.name)
+            s.effort = [0.0] * len(s.name)
+        # Only include measurements from group.
         s.name = [s.name[i] for i in indices]
         s.position = [s.position[i] for i in indices]
-        if not self.use_sim:
-            s.velocity = [s.velocity[i] for i in indices]
-            s.effort = [s.effort[i] for i in indices]
+        s.velocity = [s.velocity[i] for i in indices]
+        s.effort = [s.effort[i] for i in indices]
         return s
 
     @abc.abstractmethod
