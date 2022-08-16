@@ -77,7 +77,7 @@ class InterbotixArm:
     POSITION = POSITION
     SUPPORTED_MODES = {POSITION: MODES[POSITION], VELOCITY: MODES[VELOCITY]}
 
-    def __init__(self, robot_type: str, name: str, group_name: str = "arm"):
+    def __init__(self, robot_type: str, name: str, group_name: str = "arm", gripper_name: str = "gripper"):
         """API to an interbotix robot arm.
 
         .. note:: All motors in the group must have the same Operating Mode, Profile, Acceleration Profile,
@@ -96,7 +96,14 @@ class InterbotixArm:
         # Initialize interbotix_sdk API
         self.dxl = core.InterbotixRobotXSCore(robot_type, name, False)
 
-        # Extract relevant parameters
+        # Extract relevant gripper parameters
+        self.GRIPPER_NAME = gripper_name
+        self.GRIPPER_INFO = self.dxl.srv_get_info("single", gripper_name)
+        self._pressure_op = 0.5
+        self._pressure_low = 150
+        self._pressure_high = 350
+
+        # Extract relevant arm parameters
         self.NAME = name
         self.GROUP_NAME = group_name
         self.INFO = self.get_info()
@@ -131,6 +138,109 @@ class InterbotixArm:
             self.reboot(enable=True, smart_reboot=True)
             time.sleep(2.0)
         assert len(self.check_status()) == 0, f"Cannot initialize group `{self.GROUP_NAME}` of robot `{self.NAME}`."
+
+    def open(self) -> Future:
+        """Opens the gripper (when in 'pwm' control mode).
+
+        :return: Future of the task. Allows for blocking behavior by calling future.result(timeout [s]).
+        """
+        f = self.set_pressure(self._pressure_op)
+        return f
+
+    def close(self) -> Future:
+        """Closes the gripper (when in 'pwm' control mode).
+
+        :return: Future of the task. Allows for blocking behavior by calling future.result(timeout [s]).
+        """
+        f = self.set_pressure(-self._pressure_op)
+        return f
+
+    @abc.abstractmethod
+    def _write_gripper_pwm_command(self, pwm: int, is_feedthrough: bool = False) -> Future:
+        """Is called in .set_pressure().
+
+        :param pwm: The requested pwm for the gripper.
+        :param is_feedthrough: True if task is requested by a client. For clients, this is always False.
+        :return: Future of the task. Allows for blocking behavior by calling future.result(timeout [s]).
+        """
+        pass
+
+    def set_pressure(self, pressure: float) -> Future:
+        """
+        Set the amount of pressure that the gripper should use when opening/closing the gripper.
+
+        :param pressure: A scaling factor from -1 to 1 where the pressure increases as the absolute factor increases.
+                         A value < 0: closes the gripper. A value > 0: opens the gripper.
+        :return: Future of the task. Allows for blocking behavior by calling future.result(timeout [s]).
+        """
+        if pressure < -1 or pressure > 1:
+            raise ValueError("The gripper pressure scaling factor must be between [-1, 1]")
+
+        # Calculate pressure pwm signal
+        pwm = self._pressure_low + (abs(pressure) * (self._pressure_high - self._pressure_low))
+
+        # Determine the sign, based on scaling factor sign
+        if pressure < 0:
+            f = self._write_gripper_pwm_command(-int(pwm), is_feedthrough=False)
+        else:
+            f = self._write_gripper_pwm_command(int(pwm), is_feedthrough=False)
+        return f
+
+    def set_pressure_limits(self, operating_pressure: float, low: int = 150, high: int = 350, is_feedthrough: bool = False) -> Future:
+        """Set the amount of pressure that the gripper should use when grasping an object (when in 'effort' control mode).
+
+        **IMPORTANT** Pressure limits are **always** set. Be careful with setting the limit too high.
+
+        :param operating_pressure: Fraction between [0, 1] where '0' means the gripper operates at 'low' pressure
+                                   and '1' means the gripper operates at 'high' when opening/closing the gripper.
+        :param low: Lowest 'effort' that should be applied to the gripper if gripper_pressure is set to 0; it should be high
+                    enough to open/close the gripper (~150 PWM).
+        :param high: Largest 'effort' that should be applied to the gripper if gripper_pressure is set to 1; it should be low
+                     enough that the motor doesn't 'overload' when gripping an object for a few seconds (~350 PWM).
+        :param is_feedthrough: True if task is requested by a client. Only concerns the copilot, and always False for client.
+        :return: Future of the task. Allows for blocking behavior by calling future.result(timeout [s]).
+        """
+
+        def _task_set_pressure_limits(arm: InterbotixArm, _operating_pressure: float, _low: int, _high: int):
+            if high < low:
+                raise ValueError(f"The upper pressure limit '{_high}' should be higher than the lower pressure limit '{_low}'.")
+            if low < 150:
+                rospy.logwarn(f"Lower limit `{_low}` may not be high enough to open/close the gripper (low>~150 PWM).")
+            if high > 350:
+                rospy.logwarn(f"Upper limit `{_high}` may be too high that the motor 'overloads' when gripping an object for a "
+                              "few seconds (high<~350 PWM).")
+            if _operating_pressure > 1 or _operating_pressure < 0:
+                rospy.logerr(f"The operating pressure must be within [0, 1]. Not setting the operating pressure.")
+            else:
+                arm._pressure_op = _operating_pressure
+            arm._pressure_low = _low
+            arm._pressure_high = _high
+            return EXECUTED
+
+        f = self._submit_task(is_feedthrough, f"set pressure limits | low={low} | high={high} |) ", _task_set_pressure_limits, self, operating_pressure, low, high)
+        return f
+
+    def get_gripper_state(self) -> JointState:
+        """Get the current gripper position
+
+        :return:
+        """
+        """Get the current joint states (position, velocity, effort) of all Dynamixel motors.
+
+        :param remap: True will remap the order according to set_joint_remapping().
+        :return: JointState ROS message. Refer to online documentation to see its structure.
+        """
+        indices = self.GRIPPER_INFO.joint_state_indices
+        s = self.dxl.robot_get_joint_states()
+        if self.use_sim:  # velocities & efforts are not simulated
+            s.velocity = [0.0] * len(s.name)
+            s.effort = [0.0] * len(s.name)
+        # Only include measurements from group.
+        s.name = [s.name[i] for i in indices]
+        s.position = [s.position[i] for i in indices]
+        s.velocity = [s.velocity[i] for i in indices]
+        s.effort = [s.effort[i] for i in indices]
+        return s
 
     def create_task_loggers(self):
         # Loggers
@@ -244,6 +354,9 @@ class InterbotixArm:
     def get_ee_pose(self) -> t.Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Get the actual end-effector pose w.r.t the base frame.
 
+        Note that the end-effector is positioned at '<robot_name>/ee_gripper_link'
+        and that the Space frame is positioned at '<robot_name>/base_link'.
+
         :returns: <3x3> Rotation matrix, position vector w.r.t base, <4x4> homogeneous transformation matrix.
         """
         joint_states = [self.dxl.joint_states.position[self.dxl.js_index_map[name]] for name in
@@ -253,13 +366,21 @@ class InterbotixArm:
         return rot_mat.astype("float32"), position.astype("float32"), T_sb.astype("float32")
 
     @abc.abstractmethod
-    def _set_operating_mode(self, mode, profile_type, profile_velocity, profile_acceleration):
+    def _set_operating_mode(self, current_mode, mode, profile_type, profile_velocity, profile_acceleration):
+        """Is called in set_operating_mode().
+
+        :param current_mode: Current operating mode (mode, profile_type, profile_acceleration, profile_velocity).
+        :param mode: https://emanual.robotis.com/docs/en/dxl/x/xl430-w250/#operating-mode
+        :param profile_type: "time" or "velocity".
+        :param profile_acceleration: Sets acceleration time of the Profile (see above). ‘0’ represents an infinite acceleration.
+        :param profile_velocity: Sets velocity of the Profile (see above) . ‘0’ represents an infinite velocity.
+        :return:
+        """
         pass
 
     def set_operating_mode(self, mode: int, profile_type: str = "time", profile_acceleration: int = 300, profile_velocity: int = 2000, is_feedthrough: bool = False) -> Future:
         """Set the operating mode for the whole group of motors.
 
-         # todo: what if velocity-based profile?
          .. note:: Velocity Control Mode only uses profile_acceleration.
 
          Trapezoidal Profiles (t0, t1, t2, t3)
@@ -283,10 +404,14 @@ class InterbotixArm:
         :param profile_type: "time" or "velocity".
         :param profile_acceleration: Sets acceleration time of the Profile (see above). ‘0’ represents an infinite acceleration.
         :param profile_velocity: Sets velocity of the Profile (see above) . ‘0’ represents an infinite velocity.
-        :param is_feedthrough: True if task is requested by a client.
+                                 Appears to be ignored in VELOCITY mode. Is overwritten to a value of `0` if mode is VELOCITY.
+        :param is_feedthrough: True if task is requested by a client. Only concerns the copilot, and always False for client.
         :return: Future of the task. Allows for blocking behavior by calling f.result(timeout [s]).
                  This task will **still** executed when self.cancel_all_tasks() is called.
         """
+        # Overwrite profile_velocity if mode= Velocity (else, it is overwritten in sdk)
+        profile_velocity = 0 if mode in [VELOCITY] else profile_velocity
+
         # Save last commanded op_mode
         _operating_mode = (mode, profile_type, profile_acceleration, profile_velocity)
         self._last_op_mode = _operating_mode
@@ -299,13 +424,16 @@ class InterbotixArm:
             _mode, _profile_type, _profile_acceleration, _profile_velocity = operating_mode
             # Switch operating mode
             if mode in arm.SUPPORTED_MODES:
-                if not operating_mode == arm.get_operating_mode():
+                current_mode = arm.get_operating_mode()
+                if not operating_mode == current_mode:
+                    rospy.logwarn(f"from={current_mode} | to={operating_mode}")
                     # Set simulation operating mode
                     self._sim_op_mode = operating_mode
                     # Available operating modes in xs_sdk_obj.cpp: 'position', 'linear_position', 'ext_position', 'velocity',
                     # 'pwm', 'current', or 'current_based_position'). I.e. valid values for mode_str.
                     # print("_task_set_operating_mode: ", _mode, _profile_type, _profile_acceleration, _profile_velocity)
-                    arm._set_operating_mode(mode=mode,
+                    arm._set_operating_mode(current_mode=current_mode,
+                                            mode=mode,
                                             profile_type=profile_type,
                                             profile_velocity=profile_velocity,
                                             profile_acceleration=profile_acceleration)
@@ -318,7 +446,6 @@ class InterbotixArm:
                 raise ValueError(f"Unknown operating mode `{mode}`.")
             return EXECUTED
 
-        from interbotix_copilot.copilot import Copilot
         f = self._submit_task(is_feedthrough, f"set operating mode | mode={INTERBOTIX_MODES[mode]} | type={profile_type} | pa={profile_acceleration} | pv={profile_velocity} |) ", _task_set_operating_mode, self, _operating_mode)
         return f
 

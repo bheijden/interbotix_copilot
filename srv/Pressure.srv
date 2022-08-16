@@ -1,0 +1,5 @@
+# PWM command for the gripper joint
+
+int32 pwm                           # desired pwm command for the gripper joint.
+---
+bool success                        # True if the command was successfully set, else False (e.g. if not in 'feedthrough' mode)

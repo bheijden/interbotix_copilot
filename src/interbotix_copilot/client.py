@@ -1,11 +1,13 @@
+import numpy as np
 import typing as t
 from concurrent.futures import Future
 from threading import Event
 import time
 
-from interbotix_copilot.base_api import InterbotixArm, MODES, POSITION, VELOCITY
+from interbotix_copilot.base_api import InterbotixArm
 from interbotix_copilot.base_api import STOPPED, CANCELLED, EXECUTED
 from interbotix_copilot.srv import Command, CommandResponse, CommandRequest
+from interbotix_copilot.srv import Pressure, PressureResponse, PressureRequest
 
 try:
     import rospy
@@ -54,12 +56,14 @@ class Client(InterbotixArm):
             rospy.wait_for_service(f"/{name}/copilot/torque_enable", timeout=5.0)
             rospy.wait_for_service(f"/{name}/copilot/reboot_motors", timeout=5.0)
             rospy.wait_for_service(f"/{name}/copilot/write_commands", timeout=5.0)
+            rospy.wait_for_service(f"/{name}/copilot/write_gripper_pwm_command", timeout=5.0)
             rospy.wait_for_service(f"/{name}/copilot/stop", timeout=5.0)
             self.sub_ft = rospy.Subscriber(f"/{name}/copilot/feedthrough", Bool, callback=self._toggle_feedthrough)
             self.srv_set_reg = rospy.ServiceProxy(f"/{name}/copilot/set_motor_registers", RegisterValues)
             self.srv_torque = rospy.ServiceProxy(f"/{name}/copilot/torque_enable", TorqueEnable)
             self.srv_reboot = rospy.ServiceProxy(f"/{name}/copilot/reboot_motors", Reboot)
             self.srv_write_commands = rospy.ServiceProxy(f"/{name}/copilot/write_commands", Command)
+            self.srv_write_gripper_pwm_command = rospy.ServiceProxy(f"/{name}/copilot/write_gripper_pwm_command", Pressure)
             self.srv_stop = rospy.ServiceProxy(f"/{name}/copilot/stop", SetBool)
             # Initialize task client
             address = f"/{name}/copilot/task"
@@ -111,26 +115,20 @@ class Client(InterbotixArm):
         return f
 
     def _toggle_feedthrough(self, msg: Bool):
-        # Return if feedthrough is already toggled to new status.
-        # if self._feedthrough == msg.data:
-        #     rospy.logwarn(f"[{get_ident()}] Feedthrough already toggled to same status: "
-        #                   f"self._feedthrough={self._feedthrough} | msg.data={msg.data}")
-        #     return
         # Toggle feedthrough
         self._feedthrough = msg.data
         # Toggle feedthrough routines
         if self._feedthrough:
             # Release lock to allow feedthrough of actions
-            # rospy.loginfo(f"[{get_ident()}] Releasing lock: allowing feedthrough!")
             self._ft_event.set()
         else:
             # Acquire lock to block feedthrough actions
-            # rospy.loginfo(f"[{get_ident()}] Acquiring lock: blocking feedthrough!")
             self._ft_event.clear()
 
-    def _set_operating_mode(self, mode, profile_type, profile_velocity, profile_acceleration):
+    def _set_operating_mode(self, current_mode, mode, profile_type, profile_velocity, profile_acceleration):
         """Is called in set_operating_mode().
 
+        :param current_mode: Current operating mode (mode, profile_type, profile_acceleration, profile_velocity).
         :param mode: https://emanual.robotis.com/docs/en/dxl/x/xl430-w250/#operating-mode
         :param profile_type: "time" or "velocity".
         :param profile_acceleration: Sets acceleration time of the Profile (see above). ‘0’ represents an infinite acceleration.
@@ -197,7 +195,7 @@ class Client(InterbotixArm):
         :return: Future of the task. Allows for blocking behavior by calling future.result(timeout [s]).
         """
         # Schedule a task to go to the home position in 4 seconds
-        f = self.go_to(points=[self.INFO.num_joints * [0]], timestamps=[5.0], remap=False)
+        f = self.go_to(points=self.INFO.num_joints * [0], timestamps=5.0, remap=False)
         return f
 
     def go_to_sleep(self) -> Future:
@@ -206,7 +204,7 @@ class Client(InterbotixArm):
         :return: Future of the task. Allows for blocking behavior by calling future.result(timeout [s]).
         """
         # Schedule a task to go to the sleep position in 4 seconds
-        f = self.go_to(points=[list(self.INFO.joint_sleep_positions)], timestamps=[5.0], remap=False)
+        f = self.go_to(points=list(self.INFO.joint_sleep_positions), timestamps=5.0, remap=False)
         return f
 
     def stop(self):
@@ -250,7 +248,6 @@ class Client(InterbotixArm):
             if arm.task_event.is_set():
                 return CANCELLED
             self.srv_write_commands(mode, profile_type, profile_acceleration, profile_velocity, self.INFO.joint_names, _cmd)
-            # self.srv_write_commands(mode, profile_type, profile_acceleration, profile_velocity, _cmd)
             return EXECUTED
 
         # Submit task
@@ -297,7 +294,13 @@ class Client(InterbotixArm):
         f = self._submit_task(False, "enable", _task_enable, self, name)
         return f
 
-    def go_to(self, points: t.List[t.List[float]], timestamps: t.List[float], remap: bool = True) -> Future:
+    def go_to(self, points: t.List[t.Union[t.List[float], float]], timestamps: t.Union[float, t.List[float]], remap: bool = True) -> Future:
+        if not isinstance(points[0], (list, np.ndarray, tuple)):
+            points = [points]
+        if not isinstance(timestamps, (list, np.ndarray, tuple)):
+            timestamps = [timestamps]
+        assert len(points) == len(timestamps), "The number of waypoints must match the number of timestamps."
+
         # Get remapping
         if remap and self._to is not None:
             indices = self._to
@@ -339,4 +342,23 @@ class Client(InterbotixArm):
         # submit task
         tp = [(_t, _p) for _p, _t in zip(points_remapped, timestamps)]
         f = self._submit_task(False, f"go to | pos(t)={tp}", _go_to, self, points_remapped, timestamps)
+        return f
+
+    def _write_gripper_pwm_command(self, pwm: int, is_feedthrough: bool = False) -> Future:
+        """Is called in .set_pressure().
+
+        :param pwm: The requested pwm for the gripper.
+        :param is_feedthrough: True if task is requested by a client. For clients, this is always False.
+        :return: Future of the task. Allows for blocking behavior by calling future.result(timeout [s]).
+        """
+
+        # Define command task
+        def _task_write_pwm_command(arm: Client, _pwm: int):
+            if arm.task_event.is_set():
+                return CANCELLED
+            arm.srv_write_gripper_pwm_command(_pwm)
+            return EXECUTED
+
+        # Submit task
+        f = self._submit_task(False, f"write gripper | pwm={pwm}", _task_write_pwm_command, self, pwm)
         return f

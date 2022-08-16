@@ -6,12 +6,14 @@ import time
 from interbotix_copilot.base_api import InterbotixArm, POSITION, VELOCITY, INTERBOTIX_MODES
 from interbotix_copilot.base_api import STOPPED, CANCELLED, EXECUTED, DISCARDED
 from interbotix_copilot.srv import Command, CommandResponse, CommandRequest
+from interbotix_copilot.srv import Pressure, PressureResponse, PressureRequest
 
 try:
     import rospy
     import rosparam
     from std_msgs.msg import Bool
     from interbotix_xs_msgs.srv import *
+    from interbotix_xs_msgs.msg import JointSingleCommand
     from std_srvs.srv import SetBool, SetBoolRequest, SetBoolResponse
     # Task server
     # todo: add actionlib, control_msgs to CMakeLists.txt & package.xml.
@@ -46,9 +48,20 @@ class Copilot(InterbotixArm):
         # Call subclass constructor before initializing the copilot server.
         super().__init__(robot_type=robot_type, name=name, group_name=group_name)
 
+        # Currently, we do not change the operating mode of the gripper in the copilot.
+        if self.GRIPPER_INFO.mode != "pwm":
+            raise ValueError("Please set the gripper's 'operating mode' to 'pwm' (i.e. in the motor config).")
+
+        # ROS Timer Callback function to stop the gripper moving past its limits when in PWM mode
+        self._tmr_gripper_check = rospy.Timer(rospy.Duration(0.02), self._gripper_check)
+        self._gripper_index = self.dxl.js_index_map[self.GRIPPER_INFO.joint_names[0]]
+        self._gripper_lower_limit = self.GRIPPER_INFO.joint_lower_limits[0]
+        self._gripper_upper_limit = self.GRIPPER_INFO.joint_upper_limits[0]
+        self._gripper_moving = False
+        self._gripper_cmd = JointSingleCommand(name=self.GRIPPER_NAME)
+
         # Feedthrough toggle.
-        self.pub_ft = rospy.Publisher(f"/{name}/copilot/feedthrough", Bool, queue_size=0,
-                                      latch=True)
+        self.pub_ft = rospy.Publisher(f"/{name}/copilot/feedthrough", Bool, queue_size=0, latch=True)
 
         # GUI Application
         self.app = None
@@ -65,6 +78,7 @@ class Copilot(InterbotixArm):
         self.srv_torque = rospy.Service(f"/{name}/copilot/torque_enable", TorqueEnable, self._handler_torque)
         self.srv_reboot = rospy.Service(f"/{name}/copilot/reboot_motors", Reboot, self._handler_reboot)
         self.srv_write_commands = rospy.Service(f"/{name}/copilot/write_commands", Command, self._handler_write_commands)
+        self.srv_write_gripper_pwm_command = rospy.Service(f"/{name}/copilot/write_gripper_pwm_command", Pressure, self._handler_write_gripper_pwm_command)
         self.srv_stop = rospy.Service(f"/{name}/copilot/stop", SetBool, self._handler_stop)
 
         # Initialize task server
@@ -177,20 +191,29 @@ class Copilot(InterbotixArm):
         self._feedthrough = False
         self.pub_ft.publish(Bool(False))
 
-    def _set_operating_mode(self, mode: int, profile_type: str, profile_velocity: int, profile_acceleration: int):
+    def _set_operating_mode(self, current_mode, mode: int, profile_type: str, profile_velocity: int, profile_acceleration: int):
         """Is called in set_operating_mode().
 
-        :param mode: https://emanual.robotis.com/docs/en/dxl/x/xl430-w250/#operating-mode
+        :param current_mode: Current operating mode (mode, profile_type, profile_acceleration, profile_velocity).
         :param profile_type: "time" or "velocity".
         :param profile_acceleration: Sets acceleration time of the Profile (see above). ‘0’ represents an infinite acceleration.
         :param profile_velocity: Sets velocity of the Profile (see above) . ‘0’ represents an infinite velocity.
         :return:
         """
-        self.dxl.robot_set_operating_modes("group", "arm",
-                                           mode=INTERBOTIX_MODES[mode],
-                                           profile_type=profile_type,
-                                           profile_velocity=profile_velocity,
-                                           profile_acceleration=profile_acceleration)
+        # .robot_set_operating_modes briefly turns the motor torques off, causing the robot to fall down a few centimeters.
+        # This is required if we change register values in the EEPROM area (mode, profile_type).
+        # However, "Profile_Acceleration" and "Profile_Velocity" are in the RAM area, so no toggling is required.
+        # Therefore, set_motor_registers is used here to change pa & pv when mode & profile_type are already correctly set.
+        curr_mode, curr_profile_type, curr_pa, curr_pv = current_mode
+        if curr_mode == mode and curr_profile_type == profile_type:
+            self.dxl.robot_set_motor_registers("group", self.GROUP_NAME, "Profile_Acceleration", profile_acceleration)
+            self.dxl.robot_set_motor_registers("group", self.GROUP_NAME, "Profile_Velocity", profile_velocity)
+        else:
+            self.dxl.robot_set_operating_modes("group", "arm",
+                                               mode=INTERBOTIX_MODES[mode],
+                                               profile_type=profile_type,
+                                               profile_velocity=profile_velocity,
+                                               profile_acceleration=profile_acceleration)
 
     def set_motor_register(self, register: str, value: int, name: t.Optional[str] = None, is_feedthrough: bool = False) -> Future:
         """Set the register value for either a single motor or a group of motors.
@@ -388,12 +411,17 @@ class Copilot(InterbotixArm):
                 arm.dxl.robot_write_commands(arm.GROUP_NAME, self.INFO.num_joints * [0])
             else:  # Switch to velocity mode
                 # Switch (by-pass task scheduling, and directly switch operating mode)
-                arm._set_operating_mode(mode=arm.VELOCITY,
+                arm._set_operating_mode(current_mode=arm.get_operating_mode(),
+                                        mode=arm.VELOCITY,
                                         profile_type="time",
                                         profile_velocity=2000,
                                         profile_acceleration=300)
                 # Apply emergency break (by-pass task scheduling, and directly send command).
                 arm.dxl.robot_write_commands(arm.GROUP_NAME, self.INFO.num_joints * [0])
+            # Stop gripper movement
+            arm._gripper_cmd.cmd = 0
+            arm.dxl.pub_single.publish(arm._gripper_cmd)
+            arm._gripper_moving = False
             # Wait until exit from stopping state (must always be called from separate thread).
             self._stopping_event.wait()
             # Return whether we timed out the stopping procedure
@@ -560,5 +588,44 @@ class Copilot(InterbotixArm):
                 f.result()
         self.task_server.set_succeeded()
 
+    # todo: implement service handler
+    def _handler_write_gripper_pwm_command(self, req: PressureRequest) -> PressureResponse:
+        # Schedule command (schedules operating mode switch + command in sequence).
+        f = self._write_gripper_pwm_command(req.pwm, is_feedthrough=True)
+        _success = True if f.result() in [EXECUTED] else False
+        return PressureResponse(_success)
 
+    def _write_gripper_pwm_command(self, pwm: int, is_feedthrough: bool = False) -> Future:
+        """Is called in .set_pressure().
 
+        :param pwm: The requested pwm for the gripper.
+        :param is_feedthrough: True if task is requested by a client. For clients, this is always False.
+        :return: Future of the task. Allows for blocking behavior by calling future.result(timeout [s]).
+        """
+
+        # Define command task
+        def _task_write_pwm_command(arm: Copilot, _pwm: int):
+            if is_feedthrough and not arm._feedthrough:
+                return DISCARDED
+            if arm.task_event.is_set():
+                return CANCELLED
+            arm._gripper_cmd.cmd = _pwm
+            gripper_pos = self.dxl.joint_states.position[self._gripper_index]
+            if ((self._gripper_cmd.cmd > 0 and gripper_pos < self._gripper_upper_limit) or
+               (self._gripper_cmd.cmd < 0 and gripper_pos > self._gripper_lower_limit)):
+                arm.dxl.pub_single.publish(arm._gripper_cmd)
+                self._gripper_moving = True
+            return EXECUTED  # copilot always successfully sets commands.
+
+        f = self._submit_task(is_feedthrough, f"write gripper | pwm={pwm}", _task_write_pwm_command, self, pwm)
+
+        return f
+
+    def _gripper_check(self, event):
+        if self._gripper_moving:
+            gripper_pos = self.dxl.joint_states.position[self._gripper_index]
+            if ((self._gripper_cmd.cmd > 0 and gripper_pos >= self._gripper_upper_limit) or
+               (self._gripper_cmd.cmd < 0 and gripper_pos <= self._gripper_lower_limit)):
+                self._gripper_cmd.cmd = 0
+                self.dxl.pub_single.publish(self._gripper_cmd)
+                self._gripper_moving = False

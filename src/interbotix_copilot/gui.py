@@ -20,24 +20,7 @@ class CustomQTextEdit(QTextEdit):
         if app_thread != curr_thread:
             print("attempt to call MainWindow.append_message from non-app thread")
             raise Exception("attempt to call MainWindow.append_message from non-app thread")
-        # ms_now = datetime.datetime.now().isoformat(sep=' ', timespec='milliseconds')
         self.append(message)
-        # self.widget: QTextEdit.moveCursor(QTextCursor.End)
-        # self.messages_text_box.insertPlainText(f'{ms_now}: {message}\n')
-        # scroll to bottom
-        # self.messages_text_box.moveCursor(QtGui.QTextCursor.End)
-
-
-# class QTextEditLogger(logging.Handler):
-#     def __init__(self, parent):
-#         super().__init__()
-#         self.widget = CustomQTextEdit(parent)
-#         self.widget.setReadOnly(True)
-#         self.widget.setLineWrapMode(QTextEdit.NoWrap)
-#
-#     def emit(self, record):
-#         msg = self.format(record)
-#         self.widget.append(msg)
 
 
 class TaskLogger(logging.Handler, QtCore.QObject):
@@ -104,6 +87,20 @@ class CopilotGui(QMainWindow):
         self.disable_ft.append(self.button_home)
         self.disable_torque.append(self.button_home)
 
+        # Creating open button
+        self.button_open = QPushButton("Open")
+        self.button_open.clicked.connect(self.arm.open)
+        self.disable_stop.append(self.button_open)
+        self.disable_ft.append(self.button_open)
+        self.disable_torque.append(self.button_open)
+
+        # Creating Close button
+        self.button_close = QPushButton("Close")
+        self.button_close.clicked.connect(self.arm.close)
+        self.disable_stop.append(self.button_close)
+        self.disable_ft.append(self.button_close)
+        self.disable_torque.append(self.button_close)
+
         # Creating go to sleep button
         self.button_sleep = QPushButton("Sleep")
         self.button_sleep.clicked.connect(self.arm.go_to_sleep)
@@ -141,12 +138,14 @@ class CopilotGui(QMainWindow):
         layout = QGridLayout()
         layout.addWidget(self.button_ft, 0, 0)
         layout.addWidget(self.button_stop, 0, 1)
-        layout.addWidget(self.button_home, 1, 0)
-        layout.addWidget(self.button_reboot, 1, 1)
-        layout.addWidget(self.button_sleep, 2, 0)
-        layout.addWidget(self.button_torque, 2, 1)
-        layout.addWidget(f_logTextBox, 3, 1)
-        layout.addWidget(s_logTextBox, 3, 0)
+        layout.addWidget(self.button_reboot, 1, 0)
+        layout.addWidget(self.button_torque, 1, 1)
+        layout.addWidget(self.button_open, 2, 1)
+        layout.addWidget(self.button_close, 3, 1)
+        layout.addWidget(self.button_home, 2, 0)
+        layout.addWidget(self.button_sleep, 3, 0)
+        layout.addWidget(f_logTextBox, 4, 1)
+        layout.addWidget(s_logTextBox, 4, 0)
         container = QWidget()
         container.setLayout(layout)
 
