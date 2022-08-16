@@ -1,3 +1,7 @@
+"""
+Parts of this copilot were heavily inspired by the interbotix_xs_modules ROS package of trossenrobotics.
+"""
+
 import typing as t
 from concurrent.futures import Future
 from threading import Event

@@ -1,3 +1,7 @@
+"""
+Parts of this copilot were heavily inspired by the interbotix_xs_modules ROS package of trossenrobotics.
+"""
+
 import abc
 import time
 import typing as t
