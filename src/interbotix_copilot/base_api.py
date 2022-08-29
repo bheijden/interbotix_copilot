@@ -141,7 +141,8 @@ class InterbotixArm:
         if len(self.check_status()) > 0:
             self.reboot(enable=True, smart_reboot=True)
             time.sleep(2.0)
-        assert len(self.check_status()) == 0, f"Cannot initialize group `{self.GROUP_NAME}` of robot `{self.NAME}`."
+        assert len(self.check_status()) == 0, f"Cannot initialize group `{self.GROUP_NAME}` of robot `{self.NAME}`. " \
+                                              f"Some motors have an hardware error. Perform a reboot."
 
     def open(self) -> Future:
         """Opens the gripper (when in 'pwm' control mode).
