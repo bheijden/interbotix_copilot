@@ -10,7 +10,7 @@ and brings the robot to a halt.
 
 **Requirements**  
 - [ROS1](http://wiki.ros.org/noetic/Installation) (tested with Noetic, Melodic compiled with Python3.)
-- [Interbotix ROS Drivers](https://www.trossenrobotics.com/docs/interbotix_xsarms/ros_interface/index.html)  
+- [Interbotix ROS Drivers](https://docs.trossenrobotics.com/interbotix_xsarms_docs/ros_interface/ros1.html)  
 
 **Python dependencies**  
 - PyQt5
